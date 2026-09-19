@@ -1,0 +1,6 @@
+typesafe-sdk
+fastapi
+uvicorn
+pydantic
+python-chess
+pytest
