@@ -15,12 +15,15 @@ class JevPlayer:
     """
     Jev makes the strategic decision. This class only makes sure Jev is shown
     a legal, tactically sensible, well-described set of candidate moves.
+
+    After every turn, `last_decision` holds a plain dictionary describing what
+    happened, so a UI can show it without reaching into any internals.
     """
 
     def __init__(
         self,
         max_offered: int = 6,
-        search_depth: int = 5,
+        search_depth: int = 6,
         time_budget: float = 4.0,
         material_margin: int = 60,
         fall_back_on_bad_answer: bool = True,
@@ -50,16 +53,20 @@ class JevPlayer:
         # best-scoring candidate instead of crashing the whole game.
         self.fall_back_on_bad_answer = fall_back_on_bad_answer
 
+        # Filled in by get_move(); read by the UI. Never required by the game.
+        self.last_decision: dict | None = None
+
     # ------------------------------------------------------------ candidates
 
-    def _select_candidates(self, board: chess.Board) -> list[MoveAssessment]:
+    def _select_candidates(self, board: chess.Board):
         """
-        Generator -> TacticalFilter, with fallbacks. Returns assessments (move
-        plus score) best first. Never returns [] unless the game is over.
+        Generator -> TacticalFilter, with fallbacks. Returns
+        (offered_assessments, filter_result). Never returns an empty list of
+        offers unless the game is over.
         """
         legal_moves = list(board.legal_moves)
         if not legal_moves:
-            return []
+            return [], None
 
         pool = self.candidate_generator.generate(board=board)
         if not pool:
@@ -85,7 +92,61 @@ class JevPlayer:
                 for move in legal_moves[: self.max_offered]
             ]
 
-        return offered[: self.max_offered]
+        return offered[: self.max_offered], result
+
+    # ----------------------------------------------------------- UI records
+
+    def _build_decision(
+        self,
+        board: chess.Board,
+        offered: list[MoveAssessment],
+        result,
+        notes: dict,
+        chosen_san: str | None,
+    ) -> dict:
+        """A JSON-friendly record of this turn, for the UI panel."""
+        candidates = [
+            {
+                "san": a.san,
+                "uci": a.move.uci(),
+                "score": a.score,
+                "score_text": a.describe_score(),
+                "kept": True,
+                "reason": a.reason or "ok",
+                "note": notes.get(a.san, ""),
+                "chosen": a.san == chosen_san,
+            }
+            for a in offered
+        ]
+
+        rejected = []
+        if result is not None:
+            for a in result.rejected:
+                rejected.append(
+                    {
+                        "san": a.san,
+                        "uci": a.move.uci(),
+                        "score": a.score,
+                        "score_text": a.describe_score(),
+                        "kept": False,
+                        "reason": a.reason,
+                    }
+                )
+            # Worst first reads badly; show the near-misses first.
+            rejected.sort(key=lambda item: item["score"], reverse=True)
+
+        return {
+            "side": "white" if board.turn == chess.WHITE else "black",
+            "player": "Jev",
+            "move_number": board.fullmove_number,
+            "fen": board.fen(),
+            "chosen": chosen_san,
+            "candidates": candidates,
+            "rejected": rejected[:8],
+            "rejected_total": len(rejected),
+            "depth": getattr(result, "depth_reached", 0) if result else 0,
+            "screened_out": len(getattr(result, "screened_out", []) or []),
+        }
 
     # --------------------------------------------------------------- moving
 
@@ -95,7 +156,7 @@ class JevPlayer:
         if not legal_moves:
             raise RuntimeError("No legal moves available")
 
-        offered = self._select_candidates(board)
+        offered, result = self._select_candidates(board)
 
         if not offered:
             raise RuntimeError("No legal moves available")
@@ -104,6 +165,12 @@ class JevPlayer:
         # Plain-English note for each move: what it does, what it leaves
         # hanging, what the shallow search thinks of it.
         notes = {a.san: describe_move(board, a) for a in offered}
+
+        # Record the decision BEFORE asking, so the UI has something to show
+        # even if the call fails.
+        self.last_decision = self._build_decision(
+            board, offered, result, notes, chosen_san=None
+        )
 
         logger.info("Jev evaluating position: %s", board.fen())
         logger.info("Jev candidates: %s", ", ".join(candidates))
@@ -173,7 +240,15 @@ class JevPlayer:
                 chosen_san,
                 fallback.san,
             )
+            self.last_decision = self._build_decision(
+                board, offered, result, notes, chosen_san=fallback.san
+            )
+            self.last_decision["fallback_from"] = chosen_san
             return fallback.move
+
+        self.last_decision = self._build_decision(
+            board, offered, result, notes, chosen_san=chosen_san
+        )
 
         chosen_move = candidates[chosen_san]
 

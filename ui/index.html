@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ChessArena — Jev vs Stockfish</title>
+<style>
+/* ------------------------------------------------------------------ theme */
+:root{
+  --bg:#f4f2ee; --panel:#fffefb; --ink:#23211d; --muted:#6f6a61;
+  --line:#e2ddd3; --light:#e8e1d4; --dark:#a9a08d;
+  --accent:#6b8f71; --danger:#b4553f; --warn:#c08a3e;
+  --piece-white:#fbf8f2; --piece-white-edge:#26241f;
+  --piece-black:#2b2823; --piece-black-edge:#efe9dd;
+  --last:#d8c98a; --check:#d98a7a;
+  --radius:12px; --dur:320ms;
+  --shadow:0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.06);
+  color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#16161a; --panel:#1e1e23; --ink:#ece9e3; --muted:#9c968c;
+    --line:#2e2e35;
+    --light:#6f6a61; --dark:#41414a;
+    --last:#6b6033; --check:#7a3b30;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  }
+}
+@media (prefers-reduced-motion:reduce){ :root{ --dur:1ms; } }
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:22px 18px 40px}
+header{display:flex;align-items:baseline;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+h1{font-size:19px;font-weight:600;margin:0;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:13px}
+
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;align-items:start}
+@media (max-width:900px){ .layout{grid-template-columns:minmax(0,1fr)} }
+
+/* ------------------------------------------------------------------ board */
+.board-area{display:flex;flex-direction:column;gap:14px;min-width:0}
+.board-frame{
+  position:relative;width:100%;max-width:620px;aspect-ratio:1/1;margin:0 auto;
+  border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow);
+  background:var(--light);
+}
+.squares{position:absolute;inset:0;display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr)}
+.sq{position:relative}
+.sq.light{background:var(--light)} .sq.dark{background:var(--dark)}
+.sq .coord{
+  position:absolute;font-size:10px;font-weight:600;opacity:.55;
+  font-variant-numeric:tabular-nums;pointer-events:none;
+}
+.sq .coord.file{right:3px;bottom:1px} .sq .coord.rank{left:3px;top:1px}
+.sq.hl::after{
+  content:"";position:absolute;inset:0;background:var(--last);opacity:.55;
+}
+.sq.check::after{
+  content:"";position:absolute;inset:0;
+  background:radial-gradient(circle at center,var(--check) 0%,transparent 72%);
+  opacity:.9;
+}
+.pieces{position:absolute;inset:0;pointer-events:none}
+.pc{
+  position:absolute;top:0;left:0;width:12.5%;height:12.5%;
+  transition:transform var(--dur) cubic-bezier(.4,0,.2,1),opacity var(--dur) ease,scale var(--dur) ease;
+  will-change:transform;
+}
+/* a little breathing room inside each square */
+.pc svg{display:block;width:100%;height:100%;overflow:visible;transform:scale(.9)}
+.pc.captured{opacity:0;scale:.55}
+.pc.promoted{animation:pop var(--dur) ease}
+@keyframes pop{from{scale:.7}to{scale:1}}
+.pc g{stroke-linejoin:round;stroke-linecap:round}
+.pc.w g{fill:var(--piece-white);stroke:var(--piece-white-edge);stroke-width:1.5}
+.pc.b g{fill:var(--piece-black);stroke:var(--piece-black-edge);stroke-width:1.5}
+
+/* ---------------------------------------------------------------- controls */
+.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}
+button{
+  font:inherit;font-size:13px;font-weight:500;color:var(--ink);
+  background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:7px 14px;cursor:pointer;transition:background 120ms ease,border-color 120ms ease;
+}
+button:hover{border-color:var(--muted)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button[disabled]{opacity:.45;cursor:default}
+.speed{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+input[type=range]{width:120px;accent-color:var(--accent)}
+input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+/* ------------------------------------------------------------------- panel */
+.panel{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 15px;box-shadow:var(--shadow)}
+.card h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0 0 10px}
+
+.player{display:flex;align-items:center;gap:10px}
+.player + .player{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.dot{width:11px;height:11px;border-radius:50%;border:1px solid var(--piece-white-edge);flex:none}
+.dot.w{background:var(--piece-white)} .dot.b{background:var(--piece-black)}
+.pname{font-weight:600;font-size:14px}
+.prole{font-size:12px;color:var(--muted)}
+.think{margin-left:auto;display:flex;gap:3px;opacity:0;transition:opacity 180ms ease}
+.player.active .think{opacity:1}
+.think i{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:blink 1.1s infinite}
+.think i:nth-child(2){animation-delay:.18s} .think i:nth-child(3){animation-delay:.36s}
+@keyframes blink{0%,60%,100%{opacity:.25}30%{opacity:1}}
+@media (prefers-reduced-motion:reduce){ .think i{animation:none;opacity:.7} }
+.tray{display:flex;flex-wrap:wrap;gap:1px;margin-top:7px;min-height:20px}
+.tray svg{width:20px;height:20px}
+.tray .pc{position:static;width:20px;height:20px;transition:none}
+
+.status{font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pill{font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+.pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.pill.bad{background:var(--danger);border-color:var(--danger);color:#fff}
+.pill.warn{background:var(--warn);border-color:var(--warn);color:#fff}
+
+.moves{max-height:210px;overflow:auto;font-variant-numeric:tabular-nums}
+.moverow{display:grid;grid-template-columns:34px 1fr 1fr;gap:4px;padding:2px 0;font-size:13.5px}
+.moverow .n{color:var(--muted);font-size:12px}
+.moverow span.m{padding:1px 6px;border-radius:5px}
+.moverow span.m.latest{background:var(--last);font-weight:600}
+
+.cands{display:flex;flex-direction:column;gap:5px}
+.cand{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:baseline;padding:5px 7px;border-radius:7px;border:1px solid transparent;font-size:13px}
+.cand .san{font-weight:600;min-width:46px}
+.cand .why{color:var(--muted);font-size:11.5px;line-height:1.35;grid-column:2/4}
+.cand .sc{font-variant-numeric:tabular-nums;font-size:12px;color:var(--muted)}
+.cand.pick{background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:var(--accent)}
+.cand.pick .san::after{content:" ← Jev";font-weight:500;font-size:11px;color:var(--accent)}
+.cand.out{opacity:.72}
+.cand.out .san{text-decoration:line-through;text-decoration-thickness:1px}
+.cand.out .sc{color:var(--danger)}
+details{margin-top:9px} summary{cursor:pointer;font-size:12px;color:var(--muted)}
+summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.meta{font-size:11.5px;color:var(--muted);margin-top:9px}
+.empty{color:var(--muted);font-size:13px}
+.err{color:var(--danger);font-size:13px;word-break:break-word}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>ChessArena</h1>
+    <span class="sub">Jev (White) vs Stockfish (Black) — spectator view</span>
+  </header>
+
+  <div class="layout">
+    <div class="board-area">
+      <div class="board-frame">
+        <div class="squares" id="squares" role="img" aria-label="Chess board"></div>
+        <div class="pieces" id="pieces"></div>
+      </div>
+      <div class="controls">
+        <button id="btn-new" aria-label="Start a new game">New game</button>
+        <button id="btn-pause" aria-label="Pause the game">Pause</button>
+        <label class="speed" for="speed">
+          Delay
+          <input type="range" id="speed" min="0" max="3" step="0.1" value="0.6"
+                 aria-label="Delay between moves in seconds">
+          <span id="speed-val" aria-hidden="true">0.6s</span>
+        </label>
+      </div>
+      <p class="sr" id="live" role="status" aria-live="polite"></p>
+    </div>
+
+    <div class="panel">
+      <div class="card">
+        <div class="player" id="p-white">
+          <span class="dot w" aria-hidden="true"></span>
+          <span><span class="pname" id="name-white">Jev</span><br>
+                <span class="prole">White — LLM + safety layer</span></span>
+          <span class="think" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
+        <div class="tray" id="tray-white" aria-label="Pieces captured by Jev"></div>
+        <div class="player" id="p-black">
+          <span class="dot b" aria-hidden="true"></span>
+          <span><span class="pname" id="name-black">Stockfish</span><br>
+                <span class="prole">Black — engine, depth 12</span></span>
+          <span class="think" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
+        <div class="tray" id="tray-black" aria-label="Pieces captured by Stockfish"></div>
+        <div class="status" id="status" style="margin-top:12px"></div>
+      </div>
+
+      <div class="card">
+        <h2>Moves</h2>
+        <div class="moves" id="moves"><p class="empty">No moves yet.</p></div>
+      </div>
+
+      <div class="card">
+        <h2>Inspect Jev's decision</h2>
+        <div id="decision"><p class="empty">Waiting for Jev's first move…</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ====================================================================
+   Piece artwork. Hand-authored SVG in a 45x45 box, so it looks the same
+   on every operating system and stays sharp at any size. Colour comes
+   from CSS, so light and dark themes are handled for free.
+   ==================================================================== */
+const PIECES = {
+ p:'<circle cx="22.5" cy="13" r="6.2"/><path d="M22.5 18c-5.2 0-8.6 3.3-8.6 7.1 0 2.9 1.7 4.8 3 6.4 1.2 1.5 1.8 2.6 2 4.5h7.2c.2-1.9.8-3 2-4.5 1.3-1.6 3-3.5 3-6.4 0-3.8-3.4-7.1-8.6-7.1z"/><path d="M12 35.5h21a2.5 2.5 0 0 1 2.5 2.5v2.5h-26V38a2.5 2.5 0 0 1 2.5-2.5z"/>',
+ r:'<path d="M11.5 8.5h5.5v3.2h4.2V8.5h2.6v3.2h4.2V8.5h5.5v7.2l-3.2 2.6v9.4l3.2 2.6v4H11.5v-4l3.2-2.6v-9.4l-3.2-2.6z"/><path d="M9.5 35h26a2 2 0 0 1 2 2v3.5h-30V37a2 2 0 0 1 2-2z"/>',
+ n:'<path d="M14 39h18v-9c0-8-3.2-13.4-8.6-16.4l-1.2-4.6-3.4 3.8-5.4 3.4-1 5.2 4.4 1.8 4.6-2.8c.9 1.1.3 2.6-1.4 3.7-4.2 2.6-7 5.6-7 10.4z"/><path d="M10.5 38h24a2 2 0 0 1 2 2v1.5h-28V40a2 2 0 0 1 2-2z"/>',
+ b:'<circle cx="22.5" cy="8.5" r="3"/><path d="M22.5 11.5c5.5 4.5 8.5 9 8.5 13.5 0 3.5-2.2 6-4 7.5h-9c-1.8-1.5-4-4-4-7.5 0-4.5 3-9 8.5-13.5z"/><path d="M22.5 16.5c1.8 1.9 2.8 3.6 2.8 5.6h-5.6c0-2 1-3.7 2.8-5.6z" fill="none" stroke-width="1.4"/><path d="M13 33.5h19a2 2 0 0 1 0 4H13a2 2 0 0 1 0-4z"/><path d="M10 38.5h25a2 2 0 0 1 2 2v1.2H8v-1.2a2 2 0 0 1 2-2z"/>',
+ q:'<circle cx="6.5" cy="13" r="2.8"/><circle cx="15" cy="9.5" r="2.8"/><circle cx="22.5" cy="8" r="3"/><circle cx="30" cy="9.5" r="2.8"/><circle cx="38.5" cy="13" r="2.8"/><path d="M9 15l3 17h21l3-17-6 7-4.5-9-3 9-4.5-9-3 9z"/><path d="M11 33h23a2 2 0 0 1 0 4H11a2 2 0 0 1 0-4z"/><path d="M9 38h27a2 2 0 0 1 2 2v1.5H7V40a2 2 0 0 1 2-2z"/>',
+ k:'<path d="M20.3 3.5h4.4v4.6h4.6v4.4h-4.6V17h-4.4v-5h-4.6V8.1h4.6z"/><path d="M22.5 16c6.5 0 11 4 11 9 0 4-2 6.5-4 8.5h-14c-2-2-4-4.5-4-8.5 0-5 4.5-9 11-9z"/><path d="M11 33h23a2 2 0 0 1 0 4H11a2 2 0 0 1 0-4z"/><path d="M9 38h27a2 2 0 0 1 2 2v1.5H7V40a2 2 0 0 1 2-2z"/>'
+};
+const NAMES = {p:"pawn",r:"rook",n:"knight",b:"bishop",q:"queen",k:"king"};
+const FILES = "abcdefgh";
+
+function pieceNode(symbol){
+  const white = symbol === symbol.toUpperCase();
+  const el = document.createElement("div");
+  el.className = "pc " + (white ? "w" : "b");
+  el.innerHTML = '<svg viewBox="0 0 45 45" aria-hidden="true"><g>' +
+                 PIECES[symbol.toLowerCase()] + "</g></svg>";
+  el.dataset.symbol = symbol;
+  return el;
+}
+
+/* square name <-> board coordinates. White is always at the bottom. */
+const fileOf = sq => FILES.indexOf(sq[0]);
+const rankOf = sq => parseInt(sq[1], 10) - 1;
+const place = (el, sq) => {
+  el.style.transform = `translate(${fileOf(sq) * 100}%, ${(7 - rankOf(sq)) * 100}%)`;
+  el.dataset.square = sq;
+};
+
+/* ====================================================================
+   Board rendering
+   ==================================================================== */
+const squaresEl = document.getElementById("squares");
+const piecesEl  = document.getElementById("pieces");
+const squareDivs = {};
+
+for (let rank = 7; rank >= 0; rank--){
+  for (let file = 0; file < 8; file++){
+    const name = FILES[file] + (rank + 1);
+    const d = document.createElement("div");
+    d.className = "sq " + ((file + rank) % 2 ? "light" : "dark");
+    if (rank === 0) d.innerHTML += `<span class="coord file">${FILES[file]}</span>`;
+    if (file === 0) d.innerHTML += `<span class="coord rank">${rank + 1}</span>`;
+    squaresEl.appendChild(d);
+    squareDivs[name] = d;
+  }
+}
+
+/** square name -> piece element currently shown there */
+let onBoard = new Map();
+
+/** Read the board part of a FEN into {square: symbol}. */
+function fenToMap(fen){
+  const rows = fen.split(" ")[0].split("/");
+  const map = {};
+  rows.forEach((row, index) => {
+    const rank = 8 - index;
+    let file = 0;
+    for (const ch of row){
+      if (ch >= "1" && ch <= "8") file += Number(ch);
+      else { map[FILES[file] + rank] = ch; file++; }
+    }
+  });
+  return map;
+}
+
+/**
+ * Make the board match `fen` exactly. Called after every animation, so the
+ * display can never drift away from the truth, however many events arrive.
+ */
+function syncToFen(fen, {animate = false} = {}){
+  const want = fenToMap(fen);
+
+  for (const [sq, el] of [...onBoard]){
+    if (!want[sq]){ el.remove(); onBoard.delete(sq); }
+  }
+  for (const [sq, symbol] of Object.entries(want)){
+    const existing = onBoard.get(sq);
+    if (!existing){
+      const el = pieceNode(symbol);
+      place(el, sq);
+      if (!animate) el.style.transition = "none";
+      piecesEl.appendChild(el);
+      if (!animate) requestAnimationFrame(() => { el.style.transition = ""; });
+      onBoard.set(sq, el);
+    } else if (existing.dataset.symbol !== symbol){
+      // Same square, different piece: a promotion just completed.
+      const replacement = pieceNode(symbol);
+      place(replacement, sq);
+      replacement.classList.add("promoted");
+      existing.remove();
+      piecesEl.appendChild(replacement);
+      onBoard.set(sq, replacement);
+    }
+  }
+}
+
+function highlight(from, to, checkSquare){
+  document.querySelectorAll(".sq.hl,.sq.check")
+          .forEach(d => d.classList.remove("hl", "check"));
+  if (from && squareDivs[from]) squareDivs[from].classList.add("hl");
+  if (to && squareDivs[to]) squareDivs[to].classList.add("hl");
+  if (checkSquare && squareDivs[checkSquare]) squareDivs[checkSquare].classList.add("check");
+}
+
+/** Where is the king of the side to move? Used for the check glow. */
+function kingSquare(fen){
+  const parts = fen.split(" ");
+  const want = parts[1] === "w" ? "K" : "k";
+  const map = fenToMap(fen);
+  for (const [sq, symbol] of Object.entries(map)) if (symbol === want) return sq;
+  return null;
+}
+
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const motionOK = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const DURATION = motionOK ? 340 : 10;
+
+/**
+ * Play one move. The server told us exactly which pieces move where, so no
+ * chess rules are needed here: castling is simply two movements, and en
+ * passant is a capture on a square that is not the destination.
+ */
+async function animateMove(ev){
+  if (ev.capture){
+    const victim = onBoard.get(ev.capture.square);
+    if (victim){
+      onBoard.delete(ev.capture.square);
+      victim.classList.add("captured");
+      setTimeout(() => victim.remove(), DURATION + 40);
+    }
+  }
+
+  for (const m of ev.movements){
+    const el = onBoard.get(m.from);
+    if (!el) continue;           // syncToFen will repair anything odd
+    onBoard.delete(m.from);
+    const displaced = onBoard.get(m.to);
+    if (displaced && displaced !== el){ displaced.remove(); }
+    onBoard.set(m.to, el);
+    place(el, m.to);
+  }
+
+  await wait(DURATION + 30);
+  syncToFen(ev.fen);
+
+  const main = ev.movements[0] || {};
+  highlight(main.from, main.to, ev.in_check ? kingSquare(ev.fen) : null);
+}
+
+/* ====================================================================
+   Side panel
+   ==================================================================== */
+const el = id => document.getElementById(id);
+
+function renderTrays(captured){
+  // captured.white lists WHITE pieces that were lost, i.e. Black's trophies.
+  const fill = (node, symbols) => {
+    node.innerHTML = "";
+    symbols.forEach(sym => { const p = pieceNode(sym); node.appendChild(p); });
+  };
+  fill(el("tray-white"), captured.black || []);   // taken by Jev
+  fill(el("tray-black"), captured.white || []);   // taken by Stockfish
+}
+
+function renderMoves(list){
+  const box = el("moves");
+  if (!list.length){ box.innerHTML = '<p class="empty">No moves yet.</p>'; return; }
+  let html = "";
+  for (let i = 0; i < list.length; i += 2){
+    const n = i / 2 + 1;
+    const w = list[i] || "", b = list[i + 1] || "";
+    const wLatest = i === list.length - 1 ? " latest" : "";
+    const bLatest = i + 1 === list.length - 1 ? " latest" : "";
+    html += `<div class="moverow"><span class="n">${n}.</span>` +
+            `<span class="m${wLatest}">${w}</span>` +
+            `<span class="m${bLatest}">${b}</span></div>`;
+  }
+  box.innerHTML = html;
+  const latest = box.querySelector(".latest");
+  if (latest) latest.scrollIntoView({block:"nearest"});
+}
+
+function renderStatus(s){
+  const bits = [];
+  if (s.status === "error"){
+    bits.push('<span class="pill bad">Error</span>');
+  } else if (s.status === "over"){
+    bits.push(`<span class="pill on">Result ${s.result || ""}</span>`);
+    if (s.reason) bits.push(`<span>${s.reason}</span>`);
+  } else if (s.status === "stopped"){
+    bits.push('<span class="pill">Stopped</span>');
+  } else {
+    const who = s.turn === "white" ? (s.players.white) : (s.players.black);
+    bits.push(`<span class="pill${s.paused ? "" : " on"}">${s.paused ? "Paused" : "Playing"}</span>`);
+    bits.push(`<span>Move ${s.move_number} — ${who} to play</span>`);
+  }
+  if (s.in_check && s.status !== "over") bits.push('<span class="pill warn">Check</span>');
+  el("status").innerHTML = bits.join(" ");
+  if (s.error) el("status").innerHTML += `<div class="err">${escapeHtml(s.error)}</div>`;
+
+  el("p-white").classList.toggle("active", s.thinking === "white");
+  el("p-black").classList.toggle("active", s.thinking === "black");
+  el("btn-pause").textContent = s.paused ? "Resume" : "Pause";
+  el("btn-pause").setAttribute("aria-label", s.paused ? "Resume the game" : "Pause the game");
+  el("name-white").textContent = s.players.white;
+  el("name-black").textContent = s.players.black;
+}
+
+function escapeHtml(text){
+  return String(text).replace(/[&<>"]/g, c =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+
+function renderDecision(d){
+  const box = el("decision");
+  if (!d){ box.innerHTML = '<p class="empty">Waiting for Jev\'s first move…</p>'; return; }
+
+  const row = c => `<div class="cand ${c.chosen ? "pick" : ""} ${c.kept ? "" : "out"}">
+      <span class="san">${escapeHtml(c.san)}</span>
+      <span></span>
+      <span class="sc">${escapeHtml(c.score_text)}</span>
+      <span class="why">${escapeHtml(c.kept ? (c.note || c.reason) : c.reason)}</span>
+    </div>`;
+
+  let html = `<div class="cands">${(d.candidates || []).map(row).join("")}</div>`;
+
+  if ((d.rejected || []).length){
+    html += `<details><summary>${d.rejected_total} move${d.rejected_total === 1 ? "" : "s"} removed by the filter</summary>
+             <div class="cands" style="margin-top:7px">${d.rejected.map(row).join("")}</div></details>`;
+  }
+  const meta = [`move ${d.move_number}`, `searched ${d.depth} plies`];
+  if (d.screened_out) meta.push(`${d.screened_out} not deep-searched`);
+  if (d.fallback_from) meta.push(`Jev answered "${escapeHtml(d.fallback_from)}" — fell back`);
+  if (d.demo) meta.push("demo data");
+  html += `<div class="meta">${meta.join(" · ")}</div>`;
+  box.innerHTML = html;
+}
+
+function renderAll(s){
+  renderTrays(s.captured || {white:[], black:[]});
+  renderMoves(s.move_list || []);
+  renderStatus(s);
+  renderDecision(s.decision);
+  el("speed").value = s.move_delay;
+  el("speed-val").textContent = Number(s.move_delay).toFixed(1) + "s";
+}
+
+/* ====================================================================
+   Event stream. Every event goes through one queue and is handled in
+   order, so several moves arriving at once never animate on top of
+   each other.
+   ==================================================================== */
+let state = null;
+const queue = [];
+let pumping = false;
+
+function enqueue(ev){ queue.push(ev); pump(); }
+
+async function pump(){
+  if (pumping) return;
+  pumping = true;
+  try{
+    while (queue.length){
+      const ev = queue.shift();
+      await handle(ev);
+    }
+  } finally { pumping = false; }
+}
+
+async function handle(ev){
+  switch (ev.type){
+    case "game_started":
+      state = Object.assign(state || {}, ev);
+      syncToFen(ev.fen);
+      highlight(null, null, null);
+      renderAll(snapshotFrom(ev));
+      break;
+
+    case "turn_started":
+      if (state){ state.thinking = ev.side; state.status = "thinking"; renderStatus(state); }
+      break;
+
+    case "move_played": {
+      await animateMove(ev);
+      if (state){
+        Object.assign(state, {
+          fen: ev.fen, move_list: ev.move_list, captured: ev.captured,
+          turn: ev.turn, in_check: ev.in_check, move_number: ev.move_number,
+          thinking: null
+        });
+        if (ev.decision) state.decision = ev.decision;
+        renderAll(state);
+        el("live").textContent = `${ev.player} played ${ev.san}`;
+      }
+      break;
+    }
+
+    case "game_over":
+      if (state){
+        Object.assign(state, {status:"over", result:ev.result, reason:ev.reason,
+                              thinking:null, fen:ev.fen, move_list:ev.move_list});
+        renderAll(state);
+        el("live").textContent = `Game over: ${ev.result} by ${ev.reason}`;
+      }
+      break;
+
+    case "game_stopped":
+      if (state){ state.status = "stopped"; state.thinking = null; renderStatus(state); }
+      break;
+
+    case "error":
+      if (state){ state.status = "error"; state.error = ev.message; state.thinking = null; renderStatus(state); }
+      el("live").textContent = "Error: " + ev.message;
+      break;
+
+    case "paused":  if (state){ state.paused = true;  renderStatus(state); } break;
+    case "resumed": if (state){ state.paused = false; renderStatus(state); } break;
+    case "speed":
+      if (state){ state.move_delay = ev.move_delay;
+        el("speed").value = ev.move_delay;
+        el("speed-val").textContent = Number(ev.move_delay).toFixed(1) + "s"; }
+      break;
+  }
+}
+
+function snapshotFrom(ev){
+  return Object.assign({
+    players:{white:"Jev", black:"Stockfish"}, status:"thinking",
+    captured:{white:[],black:[]}, move_list:[], paused:false, move_delay:0.6
+  }, ev);
+}
+
+/** A fresh connection (first load, reload, or second tab) starts here. */
+function applySnapshot(s){
+  queue.length = 0;
+  state = s;
+  syncToFen(s.fen);
+  const list = s.move_list || [];
+  highlight(null, null, s.in_check ? kingSquare(s.fen) : null);
+  renderAll(s);
+}
+
+let source = null;
+function connect(){
+  if (source) source.close();
+  source = new EventSource("/events");
+  source.onmessage = e => {
+    const payload = JSON.parse(e.data);
+    if (payload.type === "snapshot") applySnapshot(payload.state);
+    else enqueue(payload);
+  };
+  source.onerror = () => { /* EventSource reconnects on its own */ };
+}
+
+/* ------------------------------------------------------------- controls */
+const post = (path, body) => fetch(path, {
+  method:"POST",
+  headers:{"Content-Type":"application/json"},
+  body: JSON.stringify(body || {})
+});
+
+el("btn-new").addEventListener("click", async () => {
+  el("btn-new").disabled = true;
+  el("btn-new").textContent = "Starting…";
+  try { await post("/api/new"); }
+  finally {
+    setTimeout(() => { el("btn-new").disabled = false; el("btn-new").textContent = "New game"; }, 900);
+  }
+});
+
+el("btn-pause").addEventListener("click", () => {
+  post(state && state.paused ? "/api/resume" : "/api/pause");
+});
+
+el("speed").addEventListener("input", e => {
+  el("speed-val").textContent = Number(e.target.value).toFixed(1) + "s";
+});
+el("speed").addEventListener("change", e => {
+  post("/api/speed", {move_delay: Number(e.target.value)});
+});
+
+/* Draw the starting position immediately so there is never a blank frame. */
+syncToFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+connect();
+</script>
+</body>
+</html>
